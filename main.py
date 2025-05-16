@@ -44,6 +44,7 @@ from youtube_transcript_api import (
     NoTranscriptFound,
     TranscriptsDisabled,
 )
+import backoff
 
 #  cliente Bard (mesmo módulo que você enviou)
 from src.backend.utils.bard import rewrite_text  # mantém compatibilidade
@@ -80,7 +81,7 @@ def _extract_video_id(url: str) -> Optional[str]:
         return parsed.path.lstrip("/")
     return None
 
-
+@backoff.on_exception(backoff.expo, Exception, max_time=60)
 def fetch_transcript(url: str, languages: List[str] | None = None) -> Optional[str]:
     languages = languages or ["pt"]
     vid = _extract_video_id(url)
@@ -113,38 +114,48 @@ def _to_json(text: str) -> dict:
     return json.loads(clean)
 
 async def _analyse_one(url: str) -> Optional[Dict[str, Any]]:
-    text = fetch_transcript(url)
-    text = _normalize(text)
-    if not text:
-        print(f"[!] Sem transcrição disponível → {url}")
-        return None
-    else:
-        print(f"[✔] Transcrição obtida → {url}")
     try:
-        raw = await rewrite_text(text=text, prompt=_PROMPT, temperature=0.3)
-        #data = json.loads(raw)
-        print(raw)
-        data = _to_json(raw)
+        # Tenta extrair a transcrição
+        text = fetch_transcript(url)
+        if not text:
+            print(f"[!] Sem transcrição disponível → {url}")
+            return None
+
+        # Limpa o texto
+        text = _normalize(text)
+        print(f"[✔] Transcrição obtida → {url}")
+
+        # Envia para o Bard
+        try:
+            raw = await rewrite_text(text=text, prompt=_PROMPT, temperature=0.3)
+            data = _to_json(raw)
+        except Exception as exc:
+            print(f"[!] Falhou Bard → {url}\n    {exc}")
+            return None
+
+        # Formata os dados para o CSV
+        return {
+            "link": url,
+            "centralidade de cristo": data.get("centralidade_de_cristo", "").strip(),
+            "salvação pela graça mediante a fé": data.get(
+                "salvacao_pela_graca_mediante_a_fe", ""
+            ).strip(),
+            "chamado ao arrependimento e discipulado": data.get(
+                "chamado_ao_arrepentimento_e_discipulado", ""
+            ).strip(),
+            "proclamação do reino de Deus": data.get(
+                "proclamacao_do_reino_de_deus", ""
+            ).strip(),
+            "autoridade das Escrituras": data.get(
+                "autoridade_das_escrituras", ""
+            ).strip(),
+            "transcrição": data.get("transcricao_corrigida", "").strip(),
+        }
+
     except Exception as exc:
-        print(f"[!] Falhou Bard → {url}\n    {exc}")
+        # Garante que qualquer erro seja logado sem interromper o loop
+        print(f"[!] Erro inesperado ao processar → {url}\n    {exc}")
         return None
-    return {
-        "link": url,
-        "centralidade de cristo": data.get("centralidade_de_cristo", "").strip(),
-        "salvação pela graça mediante a fé": data.get(
-            "salvacao_pela_graca_mediante_a_fe", ""
-        ).strip(),
-        "chamado ao arrependimento e discipulado": data.get(
-            "chamado_ao_arrepentimento_e_discipulado", ""
-        ).strip(),
-        "proclamação do reino de Deus": data.get(
-            "proclamacao_do_reino_de_deus", ""
-        ).strip(),
-        "autoridade das Escrituras": data.get(
-            "autoridade_das_escrituras", ""
-        ).strip(),
-        "transcrição": data.get("transcricao_corrigida", "").strip(),
-    }
 
 
 async def analyse_videos(urls: List[str]) -> None:
@@ -154,7 +165,7 @@ async def analyse_videos(urls: List[str]) -> None:
         row = await _analyse_one(link)
         if row:
             rows.append(row)
-        await asyncio.sleep(5)
+        await asyncio.sleep(10)
     if not rows:
         print("[x] Nada a salvar.")
         return
@@ -167,7 +178,30 @@ async def analyse_videos(urls: List[str]) -> None:
 if __name__ == "__main__":
     load_dotenv()
     LINKS = [
-        "https://www.youtube.com/watch?v=CeuqAIsrVpY",
-        "https://www.youtube.com/watch?v=HZvTW4hlSVQ"
-    ]
+    "https://youtu.be/CeuqAIsrVpY?si=tNmQhZs8WuIffPfc",
+    "https://youtu.be/HZvTW4hlSVQ?si=eh2cf4k-0A0L6XWg",
+    "https://youtu.be/esh3dsqnOCc?si=1FySTpSPxvyeftUn",
+    "https://youtu.be/gBsfbhEZbSc?si=sWvPzfGKKRurneY2",
+    "https://youtu.be/aWHB2VOJRFU?si=UyXeFZ7g0WMfEGtj",
+    "https://youtu.be/RNP510cFz_o?si=YmV33w_iSUhahaeQ",
+    "https://youtu.be/PGFgCwN0dls?si=zIloq_wXemQNJQAV",
+    "https://youtu.be/1z4awMCsX7Q?si=nnrS2eIE1Aqq296-",
+    "https://youtu.be/582Wt63bJkw?si=mDOm2InKec8swc9x",
+    "https://youtu.be/4FyFrUcsXUw?si=xvRH5xoKr10eEtPQ",
+    "https://youtu.be/IFTZIoEdJTU?si=cpf94tauZ2t4UVjk",
+    "https://youtu.be/KYUJTz-EAzk?si=nOwM4vLYZJx6Xh0Z",
+    "https://youtu.be/hYRmXkT9G58?si=M-iENKxIjEdgxcA2",
+    "https://youtu.be/L9Jis0mM3Kc?si=fUDZrLoVfgxgXBnh",
+    "https://youtu.be/ufNVVX0sLso?si=w3AOilDKyWdCSeq0",
+    "https://youtu.be/k8bIuDAlNF0?si=6eCwFG5PX2V5Q246",
+    "https://youtu.be/sKka4iIyFpU?si=rKGPh7r08I_Bo5i-",
+    "https://youtu.be/9XCLjuNutlU?si=la3-4F7wwGjgQOI0",
+    "https://youtu.be/YL3LJfcaBzE?si=aS4OvbD2o_Tgx1Hf",
+    "https://youtu.be/IQjlH-P1k_U?si=FUuj-J4Dqmztz76P",
+    "https://youtu.be/upRoAD8a6zw?si=iLs6zsOAy_iypvjF",
+    "https://youtu.be/4gG9PLtTG-w?si=OuBO8tzd86EXocka",
+    "https://youtu.be/XTAG62Lt_5M?si=E-cOpsZ9txD6Q7Rc",
+    "https://youtu.be/8nZyHwgpG3M?si=2rHaRFaLd0kjh4Qg",
+    "https://youtu.be/-259SkK8WF0?si=rfWLJQC6UUZBTc8g"
+]
     asyncio.run(analyse_videos(LINKS))
